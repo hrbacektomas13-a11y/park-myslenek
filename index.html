@@ -2386,7 +2386,8 @@ async function syncFromGitHub() {
     const remote = await ghGet();
     thoughts = mergeThoughts(thoughts, remote);
     unsnoozeExpired();
-    save();
+    // Uložit do localStorage bez spouštění GitHub uploadu (ten by byl zbytečný)
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(thoughts)); } catch (e) {}
     renderAll();
     setSyncStatus('ok');
   } catch (e) {
@@ -2471,6 +2472,10 @@ renderAll();
 if (!IS_TOUCH) input.focus();
 // Sync při startu
 syncFromGitHub();
+// Automatický sync každých 30 sekund (aby se data sdílela mezi zařízeními bez reload)
+setInterval(() => {
+  if (ghToken() && syncDebounce === null) syncFromGitHub();
+}, 30000);
 </script>
 </body>
 </html>
