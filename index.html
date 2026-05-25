@@ -1244,6 +1244,12 @@ const BACKUP_MIN_THOUGHTS = 5;
 const PRESET_TAGS = ['práce', 'sport', 'rodina', 'nápad', 'cesta', 'visionboard', 'drobnost'];
 const IS_TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
+// ============ GITHUB SYNC — konstanty (musí být před AI sekcí) ============
+const GH_OWNER     = 'hrbacektomas13-a11y';
+const GH_REPO      = 'park-myslenek';
+const GH_FILE      = 'data/thoughts.json';
+const GH_TOKEN_KEY = 'parkMysleni_ghToken';
+
 let thoughts = [];
 let selectedQuickTags = new Set();
 
@@ -1264,6 +1270,7 @@ function save() {
   } catch (e) {
     alert('Nepodařilo se uložit — možná je úložiště plné.');
   }
+  scheduleSyncToGitHub();
 }
 
 function unsnoozeExpired() {
@@ -1322,6 +1329,7 @@ function updateStatus(id, status, snoozeUntil) {
   const t = thoughts.find(x => x.id === id);
   if (!t) return;
   t.status = status;
+  t.updatedAt = new Date().toISOString();
   if (status === 'done') t.doneAt = new Date().toISOString();
   if (status === 'snoozed' && snoozeUntil) t.snoozeUntil = snoozeUntil;
   if (status !== 'snoozed') delete t.snoozeUntil;
@@ -1957,6 +1965,10 @@ document.getElementById('eodSnoozeCancel').addEventListener('click', () => {
 document.getElementById('eodPrevBtn').addEventListener('click', () => {
   if (eodIndex > 0) {
     eodIndex--;
+    // Přeskoč dopředu přes myšlenky, které byly smazány nebo zpracovány
+    while (eodIndex > 0 && !thoughts.find(t => t.id === eodQueue[eodIndex] && t.status === 'open')) {
+      eodIndex--;
+    }
     renderEodThought();
   }
 });
@@ -2203,7 +2215,9 @@ async function saveInsight() {
       `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${AI_INSIGHTS_PATH}`,
       { headers: { 'Authorization': `Bearer ${ghToken()}`, 'Accept': 'application/vnd.github+json' } }
     );
+    if (!fileResp.ok) throw new Error(`Nepodařilo se načíst soubor vhledů: HTTP ${fileResp.status}`);
     const fileData = await fileResp.json();
+    if (!fileData.content) throw new Error('Soubor vhledů je prázdný nebo má neočekávaný formát.');
     const currentContent = fromB64(fileData.content);
     const newContent = currentContent.replace(
       '*Zatím žádné uložené vhledy. Začnou přibývat po prvních konverzacích.*',
@@ -2268,11 +2282,6 @@ document.getElementById('aiUserInput').addEventListener('keydown', e => {
 document.getElementById('aiSaveInsightBtn').addEventListener('click', saveInsight);
 
 // ============ GITHUB SYNC ============
-const GH_OWNER     = 'hrbacektomas13-a11y';
-const GH_REPO      = 'park-myslenek';
-const GH_FILE      = 'data/thoughts.json';
-const GH_TOKEN_KEY = 'parkMysleni_ghToken';
-
 let ghSha = null;
 let syncDebounce = null;
 
@@ -2307,7 +2316,7 @@ async function ghGet() {
   return JSON.parse(fromB64(data.content));
 }
 
-async function ghPut(data) {
+async function ghPut(data, retries = 0) {
   const token = ghToken();
   if (!token) return;
   const json = JSON.stringify(data, null, 2);
@@ -2326,9 +2335,10 @@ async function ghPut(data) {
     }
   );
   if (r.status === 409) {
-    // SHA conflict — načti znovu a zkus jednou víc
+    // SHA conflict — načti znovu a zkus jednou víc (max 3 pokusy)
+    if (retries >= 3) throw new Error('Konflikt SHA — zkus to znovu ručně');
     await ghGet();
-    return ghPut(data);
+    return ghPut(data, retries + 1);
   }
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(`PUT ${r.status}: ${e.message || ''}`); }
   const result = await r.json();
@@ -2337,8 +2347,19 @@ async function ghPut(data) {
 
 function mergeThoughts(local, remote) {
   const map = {};
-  remote.forEach(t => { map[t.id] = t; });           // remote = základ (zdroj pravdy)
-  local.forEach(t => { if (!map[t.id]) map[t.id] = t; }); // local přidá nové, co ještě nejsou v remote
+  // Základ je remote
+  remote.forEach(t => { map[t.id] = t; });
+  // Local přidá nové myšlenky, co ještě nejsou v remote
+  // Pro existující myšlenky: vyhraje ta s novějším updatedAt (nebo createdAt, pokud updatedAt chybí)
+  local.forEach(t => {
+    if (!map[t.id]) {
+      map[t.id] = t;  // nová lokální myšlenka
+    } else {
+      const localTime  = t.updatedAt  || t.createdAt;
+      const remoteTime = map[t.id].updatedAt || map[t.id].createdAt;
+      if (localTime > remoteTime) map[t.id] = t;  // lokální je novější — vyhraje
+    }
+  });
   return Object.values(map).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
@@ -2386,20 +2407,10 @@ function scheduleSyncToGitHub() {
     } catch (e) {
       console.warn('Sync↑ failed:', e);
       setSyncStatus('error');
+    } finally {
+      syncDebounce = null;  // reset — umožní opakování po chybě
     }
   }, 1500); // 1,5 s debounce — shlukne rychlé změny
-}
-
-// Přichytit ke každému save()
-const _origSave = save;
-// Přepíšeme save tak, aby po uložení do localStorage naplánoval i GitHub sync
-function save() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(thoughts));
-  } catch (e) {
-    alert('Nepodařilo se uložit — možná je úložiště plné.');
-  }
-  scheduleSyncToGitHub();
 }
 
 // Sync indikátor — klepnutí
