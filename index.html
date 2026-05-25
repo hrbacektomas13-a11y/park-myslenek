@@ -1158,6 +1158,9 @@
         <input type="text" id="aiUserInput" placeholder="Napiš odpověď nebo otázku…" autocapitalize="sentences">
         <button class="btn primary" id="aiSendBtn">Odeslat</button>
       </div>
+      <div style="padding: 8px 16px calc(8px + var(--safe-bottom)); border-top: 1px solid var(--border);">
+        <button class="btn" id="aiSaveInsightBtn" style="display:none; width:100%; font-size:13px; color: var(--warm); border-color: var(--warm);">💾 Uložit vhled do paměti kouče</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1976,25 +1979,92 @@ document.getElementById('eodModal').addEventListener('click', e => {
 });
 
 // ============ AI KOUČ ============
-const AI_KEY_STORAGE  = 'parkMysleni_anthropicKey';
-const AI_KB_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/data/knowledge-base.md`;
-const AI_MODEL  = 'claude-haiku-4-5';
+const AI_KEY_STORAGE   = 'parkMysleni_anthropicKey';
+const AI_KB_URL        = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/data/knowledge-base.md`;
+const AI_INSIGHTS_URL  = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/data/ai-insights.md`;
+const AI_INSIGHTS_PATH = 'data/ai-insights.md';
+const AI_MODEL         = 'claude-haiku-4-5';
 
-let aiKnowledgeBase  = null;   // cache na session
-let aiChatHistory    = [];
-let aiCurrentId      = null;
-let aiSending        = false;
-
-async function loadKnowledgeBase() {
-  if (aiKnowledgeBase) return aiKnowledgeBase;
-  try {
-    const r = await fetch(AI_KB_URL + '?_=' + Date.now());
-    if (r.ok) aiKnowledgeBase = await r.text();
-  } catch (e) { console.warn('KB load failed:', e); }
-  return aiKnowledgeBase || '';
-}
+let aiKnowledgeBase = null;  // cache na session
+let aiInsights      = null;  // cache na session
+let aiChatHistory   = [];
+let aiCurrentId     = null;
+let aiSending       = false;
 
 function aiKey() { return localStorage.getItem(AI_KEY_STORAGE); }
+
+async function loadAiContext() {
+  const [kb, insights] = await Promise.all([
+    aiKnowledgeBase ? Promise.resolve(aiKnowledgeBase) :
+      fetch(AI_KB_URL + '?_=' + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+    aiInsights ? Promise.resolve(aiInsights) :
+      fetch(AI_INSIGHTS_URL + '?_=' + Date.now()).then(r => r.ok ? r.text() : '').catch(() => '')
+  ]);
+  aiKnowledgeBase = kb;
+  aiInsights = insights;
+  return { kb, insights };
+}
+
+function buildThoughtContext() {
+  // Statistiky všech myšlenek
+  const open     = thoughts.filter(t => t.status === 'open');
+  const tagCounts = {};
+  thoughts.forEach(t => t.tags.forEach(tag => { tagCounts[tag] = (tagCounts[tag] || 0) + 1; }));
+  const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 8)
+    .map(([t, n]) => `#${t} (${n}×)`).join(', ');
+
+  const recentOpen = open.slice(0, 20);
+  const recentLines = recentOpen.map((t, i) => {
+    const tags = t.tags.length ? ` [${t.tags.join(', ')}]` : '';
+    const age  = Math.floor((Date.now() - new Date(t.createdAt)) / 86400000);
+    return `${i + 1}. „${t.text}"${tags} — před ${age === 0 ? 'méně než dnem' : age + ' dny'}`;
+  }).join('\n');
+
+  return `## TOMÁŠOVY MYŠLENKY — kontext pro analýzu vzorců
+
+Celkem myšlenek v databázi: ${thoughts.length} (otevřených: ${open.length})
+Nejčastější témata: ${topTags || 'žádné tagy'}
+
+Posledních až 20 otevřených myšlenek:
+${recentLines || '(žádné otevřené myšlenky)'}`;
+}
+
+function buildSystemPrompt(kb, insights) {
+  return `Jsi psychologický kouč Tomáše Hrbáčka. Máš přístup k jeho CliftonStrengths profilu, psychologickému profilu, historii jeho myšlenek a vhledům z minulých konverzací.
+
+## METODIKA ANALÝZY
+
+Při každé myšlence pracuješ ve třech vrstvách:
+1. **POVRCH** — co myšlenka říká doslova
+2. **HLOUBKA** — co za ní pravděpodobně stojí (potřeba, hodnota, strach, energie, nedokončená smyčka)
+3. **TALENT** — který CliftonStrengths talent se aktivuje nebo blokuje, a jak to konkrétně vypadá u Tomáše
+
+Pak navrhni jeden konkrétní krok nebo polož jednu přesnou otázku — ne obojí najednou.
+
+## PRAVIDLA
+
+- Odpovídej vždy česky, stručně, přímočaře
+- Žádná terapeutická nebo coachingová klišé
+- Neptej se na více než jednu otázku v jedné odpovědi
+- Hledej vzorce — pokud vidíš stejné téma nebo talent opakovaně v historii myšlenek, pojmenuj ho
+- Neopakuj celý text myšlenky zpátky
+
+---
+
+## ZNALOSTNÍ BÁZE — profil Tomáše
+
+${kb}
+
+---
+
+## ULOŽENÉ VHLEDY Z MINULÝCH KONVERZACÍ
+
+${insights || '(zatím žádné uložené vhledy)'}
+
+---
+
+${buildThoughtContext()}`;
+}
 
 async function openAiModal(thoughtId) {
   const thought = thoughts.find(t => t.id === thoughtId);
@@ -2004,6 +2074,7 @@ async function openAiModal(thoughtId) {
 
   document.getElementById('aiThoughtPreview').textContent = thought.text;
   document.getElementById('aiChatMessages').innerHTML = '';
+  document.getElementById('aiSaveInsightBtn').style.display = 'none';
   document.getElementById('aiModal').style.display = 'flex';
   document.body.classList.add('modal-open');
 
@@ -2019,8 +2090,8 @@ async function openAiModal(thoughtId) {
 async function startAiChat(thought) {
   document.getElementById('aiKeySetup').style.display = 'none';
   document.getElementById('aiChatArea').style.display  = 'flex';
-  const tagsStr = thought.tags.length ? ` (tagy: ${thought.tags.map(t => '#' + t).join(', ')})` : '';
-  await sendToAI(`Tato myšlenka mi leží v hlavě: „${thought.text}"${tagsStr}. Pomoz mi s tím.`);
+  const tagsStr = thought.tags.length ? ` [tagy: ${thought.tags.join(', ')}]` : '';
+  await sendToAI(`Myšlenka k rozboru: „${thought.text}"${tagsStr}`);
 }
 
 function addChatMsg(role, text) {
@@ -2040,25 +2111,17 @@ async function sendToAI(userText) {
   addChatMsg('user', userText);
   aiChatHistory.push({ role: 'user', content: userText });
 
-  const input = document.getElementById('aiUserInput');
+  const input   = document.getElementById('aiUserInput');
   const sendBtn = document.getElementById('aiSendBtn');
-  if (input) input.value = '';
+  if (input)   input.value = '';
   if (sendBtn) sendBtn.disabled = true;
 
   const typingEl = addChatMsg('assistant', '…');
   typingEl.classList.add('chat-typing');
 
   try {
-    const kb = await loadKnowledgeBase();
-    const systemText = `Jsi osobní kouč a poradce Tomáše Hrbáčka. Znáš jeho CliftonStrengths profil a psychologický profil — najdeš je níže.
-
-Tvůj styl: stručný, přímý, konkrétní. Žádná terapeutická řeč. Neptej se na více než jednu otázku v jedné odpovědi. Odpovídej vždy česky. Neopakuj celou myšlenku zpátky.
-
-Cíl: pomoct Tomášovi pochopit, co za myšlenkou stojí, a dostat se k prvnímu konkrétnímu kroku nebo rozhodnutí.
-
----
-
-${kb}`;
+    const { kb, insights } = await loadAiContext();
+    const systemText = buildSystemPrompt(kb, insights);
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -2088,6 +2151,11 @@ ${kb}`;
     aiChatHistory.push({ role: 'assistant', content: reply });
     addChatMsg('assistant', reply);
 
+    // Po první odpovědi nabídni uložení vhledu
+    if (aiChatHistory.length >= 2) {
+      document.getElementById('aiSaveInsightBtn').style.display = 'block';
+    }
+
   } catch (e) {
     typingEl.remove();
     addChatMsg('assistant', `⚠️ Chyba: ${e.message}`);
@@ -2095,6 +2163,78 @@ ${kb}`;
     aiSending = false;
     if (sendBtn) sendBtn.disabled = false;
     if (input && !IS_TOUCH) input.focus();
+  }
+}
+
+async function saveInsight() {
+  const btn = document.getElementById('aiSaveInsightBtn');
+  btn.disabled = true;
+  btn.textContent = 'Ukládám…';
+
+  // Požádej AI o shrnutí vhledu
+  const summarizeMsg = 'Shrň klíčový psychologický vhled z této konverzace do 3–5 vět pro budoucí referenci. Zaměř se na vzorec, talent nebo potřebu, která se ukázala. Začni datem: ' + new Date().toLocaleDateString('cs-CZ') + '.';
+
+  const { kb, insights } = await loadAiContext();
+  const systemText = buildSystemPrompt(kb, insights);
+
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': aiKey(),
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+        'anthropic-beta': 'prompt-caching-2024-07-31'
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        max_tokens: 300,
+        system: [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }],
+        messages: [...aiChatHistory, { role: 'user', content: summarizeMsg }]
+      })
+    });
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data   = await resp.json();
+    const insight = data.content[0].text;
+
+    // Načti aktuální soubor (potřebujeme SHA)
+    const fileResp = await fetch(
+      `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${AI_INSIGHTS_PATH}`,
+      { headers: { 'Authorization': `Bearer ${ghToken()}`, 'Accept': 'application/vnd.github+json' } }
+    );
+    const fileData = await fileResp.json();
+    const currentContent = fromB64(fileData.content);
+    const newContent = currentContent.replace(
+      '*Zatím žádné uložené vhledy. Začnou přibývat po prvních konverzacích.*',
+      ''
+    ) + `\n---\n\n${insight}\n`;
+
+    await fetch(
+      `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${AI_INSIGHTS_PATH}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${ghToken()}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/vnd.github+json'
+        },
+        body: JSON.stringify({
+          message: 'ai: uložen nový vhled z konverzace',
+          content: toB64(newContent),
+          sha: fileData.sha
+        })
+      }
+    );
+
+    aiInsights = newContent; // aktualizuj cache
+    addChatMsg('assistant', `✓ Vhled uložen do databáze pro příští konverzace.`);
+    btn.style.display = 'none';
+
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '💾 Uložit vhled';
+    addChatMsg('assistant', `⚠️ Nepodařilo se uložit: ${e.message}`);
   }
 }
 
@@ -2124,6 +2264,8 @@ document.getElementById('aiSendBtn').addEventListener('click', () => {
 document.getElementById('aiUserInput').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendToAI(e.target.value); }
 });
+
+document.getElementById('aiSaveInsightBtn').addEventListener('click', saveInsight);
 
 // ============ GITHUB SYNC ============
 const GH_OWNER     = 'hrbacektomas13-a11y';
