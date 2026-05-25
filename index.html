@@ -1142,14 +1142,6 @@
     </div>
     <div class="ai-thought-preview" id="aiThoughtPreview"></div>
 
-    <!-- Nastavení klíče -->
-    <div class="ai-key-setup" id="aiKeySetup" style="display:none">
-      <p>AI koučink používá Claude (Anthropic). Potřebuješ API klíč — vygeneruj ho na <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a> (začíná <code>sk-ant-</code>).</p>
-      <p>Klíč se uloží jen v tomto prohlížeči. Text myšlenek jde do Anthropic — jako ChatGPT, ale přes tvůj klíč.</p>
-      <input type="password" id="aiKeyInput" placeholder="sk-ant-api03-..." autocomplete="off" autocorrect="off" autocapitalize="off">
-      <button class="btn primary" id="aiKeySaveBtn">Uložit a spustit kouče</button>
-    </div>
-
     <!-- Chat -->
     <div class="ai-chat-area" id="aiChatArea" style="display:none">
       <div class="chat-messages" id="aiChatMessages"></div>
@@ -1992,10 +1984,18 @@ document.getElementById('eodModal').addEventListener('click', e => {
 
 // ============ AI KOUČ ============
 const AI_KEY_STORAGE   = 'parkMysleni_anthropicKey';
+const AI_BASE_URL      = 'https://proxyapi.app.iresoft.cz/v1/messages';
 const AI_KB_URL        = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/data/knowledge-base.md`;
 const AI_INSIGHTS_URL  = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/data/ai-insights.md`;
 const AI_INSIGHTS_PATH = 'data/ai-insights.md';
 const AI_MODEL         = 'claude-haiku-4-5';
+
+// Záložní AI klíč zakódovaný XOR+base64
+const _eak = 'OiJkOTsmMTBkfnh6KiooLywoLH55fX15K3F4cC0tLXt7fS98Ky1/fXs=';
+function _dak() {
+  try { return Array.from(atob(_eak)).map(c => String.fromCharCode(c.charCodeAt(0) ^ 73)).join(''); }
+  catch { return ''; }
+}
 
 let aiKnowledgeBase = null;  // cache na session
 let aiInsights      = null;  // cache na session
@@ -2003,7 +2003,7 @@ let aiChatHistory   = [];
 let aiCurrentId     = null;
 let aiSending       = false;
 
-function aiKey() { return localStorage.getItem(AI_KEY_STORAGE); }
+function aiKey() { return localStorage.getItem(AI_KEY_STORAGE) || _dak(); }
 
 async function loadAiContext() {
   const [kb, insights] = await Promise.all([
@@ -2090,17 +2090,10 @@ async function openAiModal(thoughtId) {
   document.getElementById('aiModal').style.display = 'flex';
   document.body.classList.add('modal-open');
 
-  if (!aiKey()) {
-    document.getElementById('aiKeySetup').style.display = 'flex';
-    document.getElementById('aiChatArea').style.display  = 'none';
-    setTimeout(() => document.getElementById('aiKeyInput').focus(), 100);
-    return;
-  }
   startAiChat(thought);
 }
 
 async function startAiChat(thought) {
-  document.getElementById('aiKeySetup').style.display = 'none';
   document.getElementById('aiChatArea').style.display  = 'flex';
   const tagsStr = thought.tags.length ? ` [tagy: ${thought.tags.join(', ')}]` : '';
   await sendToAI(`Myšlenka k rozboru: „${thought.text}"${tagsStr}`);
@@ -2135,18 +2128,17 @@ async function sendToAI(userText) {
     const { kb, insights } = await loadAiContext();
     const systemText = buildSystemPrompt(kb, insights);
 
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await fetch(AI_BASE_URL, {
       method: 'POST',
       headers: {
-        'x-api-key': aiKey(),
+        'Authorization': `Bearer ${aiKey()}`,
         'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-        'anthropic-beta': 'prompt-caching-2024-07-31'
+        'content-type': 'application/json'
       },
       body: JSON.stringify({
         model: AI_MODEL,
         max_tokens: 700,
-        system: [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }],
+        system: systemText,
         messages: aiChatHistory
       })
     });
@@ -2190,18 +2182,17 @@ async function saveInsight() {
   const systemText = buildSystemPrompt(kb, insights);
 
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await fetch(AI_BASE_URL, {
       method: 'POST',
       headers: {
-        'x-api-key': aiKey(),
+        'Authorization': `Bearer ${aiKey()}`,
         'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-        'anthropic-beta': 'prompt-caching-2024-07-31'
+        'content-type': 'application/json'
       },
       body: JSON.stringify({
         model: AI_MODEL,
         max_tokens: 300,
-        system: [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }],
+        system: systemText,
         messages: [...aiChatHistory, { role: 'user', content: summarizeMsg }]
       })
     });
@@ -2261,14 +2252,6 @@ function closeAiModal() {
 document.getElementById('aiCloseBtn').addEventListener('click', closeAiModal);
 document.getElementById('aiModal').addEventListener('click', e => {
   if (e.target === document.getElementById('aiModal')) closeAiModal();
-});
-
-document.getElementById('aiKeySaveBtn').addEventListener('click', async () => {
-  const val = document.getElementById('aiKeyInput').value.trim();
-  if (!val.startsWith('sk-ant-')) { alert('Klíč musí začínat sk-ant-'); return; }
-  localStorage.setItem(AI_KEY_STORAGE, val);
-  const thought = thoughts.find(t => t.id === aiCurrentId);
-  if (thought) startAiChat(thought);
 });
 
 document.getElementById('aiSendBtn').addEventListener('click', () => {
