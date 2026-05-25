@@ -100,6 +100,80 @@
     white-space: nowrap;
   }
 
+  /* Sync indikátor */
+  .sync-indicator {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-family: inherit;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    padding: 0;
+  }
+  .sync-indicator:hover { border-color: var(--text-muted); color: var(--text); }
+  .sync-syncing { color: var(--accent) !important; animation: spin 1.2s linear infinite; }
+  .sync-ok { color: var(--accent) !important; border-color: rgba(109,185,163,0.4) !important; }
+  .sync-error { color: var(--danger) !important; border-color: var(--danger) !important; }
+  .sync-notoken { color: var(--text-muted); }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+  /* Token modal */
+  .token-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.72);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 2000;
+  }
+  .token-modal-card {
+    background: var(--card);
+    border-radius: 18px 18px 0 0;
+    width: 100%;
+    max-width: 600px;
+    padding: 8px 20px calc(28px + var(--safe-bottom));
+  }
+  .token-modal-card h2 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 16px 0 6px;
+  }
+  .token-modal-card p {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin: 0 0 14px;
+    line-height: 1.5;
+  }
+  .token-modal-card input[type=text], .token-modal-card input[type=password] {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 15px;
+    font-family: inherit;
+    -webkit-appearance: none;
+    margin-bottom: 10px;
+  }
+  .token-modal-card input:focus { outline: none; border-color: var(--accent); }
+  .token-modal-actions { display: flex; gap: 8px; margin-top: 4px; }
+  .token-modal-actions .btn { flex: 1; text-align: center; }
+  .token-delete { font-size: 12px; color: var(--danger); background: none; border: none; cursor: pointer; font-family: inherit; margin-top: 12px; display: block; }
+
+  @media (min-width: 600px) {
+    .token-modal-card { border-radius: 16px; padding: 8px 28px 28px; }
+  }
+
   nav {
     display: flex;
     gap: 4px;
@@ -862,7 +936,10 @@
       <h1>Park<span class="dot">·</span>myšlenek</h1>
       <span class="tagline">vysyp hlavu, večer ji nepotřebuješ</span>
     </div>
-    <button class="eod-trigger-btn" id="eodTrigger" style="display:none" title="Projít otevřené myšlenky">Projít den</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="sync-indicator sync-notoken" id="syncIndicator" title="Synchronizace">↻</button>
+      <button class="eod-trigger-btn" id="eodTrigger" style="display:none" title="Projít otevřené myšlenky">Projít den</button>
+    </div>
   </header>
 
   <div class="backup-banner" id="backupBanner" style="display:none"></div>
@@ -928,6 +1005,22 @@
   </section>
 
   <footer>Park myšlenek · jediný soubor, žádný server, vše u tebe.</footer>
+</div>
+
+<!-- TOKEN MODAL -->
+<div class="token-modal-overlay" id="tokenModal" style="display:none">
+  <div class="token-modal-card">
+    <div class="modal-handle"></div>
+    <h2>Synchronizace mezi zařízeními</h2>
+    <p>Zadej GitHub Personal Access Token — uloží se jen v tomto prohlížeči, nikam neodchází. Myšlenky se pak automaticky synchronizují mezi iPhonem a MacBookem.</p>
+    <p>⚠️ Repo je veřejné — kdokoli s URL může číst tvoje myšlenky. Doporučuju ho v GitHub Settings přepnout na <strong>privátní</strong>.</p>
+    <input type="password" id="tokenInput" placeholder="github_pat_..." autocomplete="off" autocorrect="off" autocapitalize="off">
+    <div class="token-modal-actions">
+      <button class="btn" id="tokenCancelBtn">Zrušit</button>
+      <button class="btn primary" id="tokenSaveBtn">Uložit a synchronizovat</button>
+    </div>
+    <button class="token-delete" id="tokenDeleteBtn" style="display:none">Odebrat token (vypnout sync)</button>
+  </div>
 </div>
 
 <!-- EOD MODAL -->
@@ -1724,11 +1817,199 @@ document.getElementById('eodModal').addEventListener('click', e => {
   if (e.target === document.getElementById('eodModal')) closeEodModal();
 });
 
+// ============ GITHUB SYNC ============
+const GH_OWNER     = 'hrbacektomas13-a11y';
+const GH_REPO      = 'park-myslenek';
+const GH_FILE      = 'data/thoughts.json';
+const GH_TOKEN_KEY = 'parkMysleni_ghToken';
+
+let ghSha = null;
+let syncDebounce = null;
+
+function ghToken() { return localStorage.getItem(GH_TOKEN_KEY); }
+
+function toB64(str) {
+  // Správná konverze UTF-8 → base64 (zvládne češtinu)
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  bytes.forEach(b => bin += String.fromCharCode(b));
+  return btoa(bin);
+}
+
+function fromB64(b64) {
+  const bin = atob(b64.replace(/[\r\n]/g, ''));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+async function ghGet() {
+  const token = ghToken();
+  const headers = { 'Accept': 'application/vnd.github+json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const r = await fetch(
+    `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}?_=${Date.now()}`,
+    { headers }
+  );
+  if (!r.ok) throw new Error(`GET ${r.status}`);
+  const data = await r.json();
+  ghSha = data.sha;
+  return JSON.parse(fromB64(data.content));
+}
+
+async function ghPut(data) {
+  const token = ghToken();
+  if (!token) return;
+  const json = JSON.stringify(data, null, 2);
+  const body = { message: 'sync: park myšlenek', content: toB64(json) };
+  if (ghSha) body.sha = ghSha;
+  const r = await fetch(
+    `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}`,
+    {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.github+json'
+      },
+      body: JSON.stringify(body)
+    }
+  );
+  if (r.status === 409) {
+    // SHA conflict — načti znovu a zkus jednou víc
+    await ghGet();
+    return ghPut(data);
+  }
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(`PUT ${r.status}: ${e.message || ''}`); }
+  const result = await r.json();
+  ghSha = result.content.sha;
+}
+
+function mergeThoughts(local, remote) {
+  const map = {};
+  remote.forEach(t => { map[t.id] = t; });           // remote = základ (zdroj pravdy)
+  local.forEach(t => { if (!map[t.id]) map[t.id] = t; }); // local přidá nové, co ještě nejsou v remote
+  return Object.values(map).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function setSyncStatus(status) {
+  const el = document.getElementById('syncIndicator');
+  if (!el) return;
+  const cfg = {
+    idle:     { icon: '↻', cls: 'sync-notoken', title: 'Synchronizace není nastavena — klepni' },
+    notoken:  { icon: '↻', cls: 'sync-notoken', title: 'Synchronizace není nastavena — klepni pro nastavení' },
+    syncing:  { icon: '↻', cls: 'sync-syncing', title: 'Synchronizuji...' },
+    ok:       { icon: '✓', cls: 'sync-ok',      title: 'Synchronizováno s GitHubem' },
+    error:    { icon: '!', cls: 'sync-error',   title: 'Chyba synchronizace — klepni pro opakování' },
+  };
+  const s = cfg[status] || cfg.idle;
+  el.textContent = s.icon;
+  el.title = s.title;
+  el.className = `sync-indicator ${s.cls}`;
+}
+
+async function syncFromGitHub() {
+  if (!ghToken()) { setSyncStatus('notoken'); return; }
+  setSyncStatus('syncing');
+  try {
+    const remote = await ghGet();
+    thoughts = mergeThoughts(thoughts, remote);
+    unsnoozeExpired();
+    save();
+    renderAll();
+    setSyncStatus('ok');
+  } catch (e) {
+    console.warn('Sync↓ failed:', e);
+    setSyncStatus('error');
+  }
+}
+
+function scheduleSyncToGitHub() {
+  if (!ghToken()) return;
+  clearTimeout(syncDebounce);
+  setSyncStatus('syncing');
+  syncDebounce = setTimeout(async () => {
+    try {
+      if (!ghSha) await ghGet();  // potřebujeme SHA před prvním zápisem
+      await ghPut(thoughts);
+      setSyncStatus('ok');
+    } catch (e) {
+      console.warn('Sync↑ failed:', e);
+      setSyncStatus('error');
+    }
+  }, 1500); // 1,5 s debounce — shlukne rychlé změny
+}
+
+// Přichytit ke každému save()
+const _origSave = save;
+// Přepíšeme save tak, aby po uložení do localStorage naplánoval i GitHub sync
+function save() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(thoughts));
+  } catch (e) {
+    alert('Nepodařilo se uložit — možná je úložiště plné.');
+  }
+  scheduleSyncToGitHub();
+}
+
+// Sync indikátor — klepnutí
+document.getElementById('syncIndicator').addEventListener('click', () => {
+  if (!ghToken()) {
+    openTokenModal();
+  } else if (syncDebounce === null && document.getElementById('syncIndicator').classList.contains('sync-error')) {
+    syncFromGitHub();
+  } else {
+    openTokenModal();
+  }
+});
+
+// ============ TOKEN MODAL ============
+function openTokenModal() {
+  const modal = document.getElementById('tokenModal');
+  const input = document.getElementById('tokenInput');
+  const del = document.getElementById('tokenDeleteBtn');
+  input.value = ghToken() || '';
+  del.style.display = ghToken() ? 'block' : 'none';
+  modal.style.display = 'flex';
+  document.body.classList.add('modal-open');
+  setTimeout(() => input.focus(), 100);
+}
+
+function closeTokenModal() {
+  document.getElementById('tokenModal').style.display = 'none';
+  document.body.classList.remove('modal-open');
+}
+
+document.getElementById('tokenCancelBtn').addEventListener('click', closeTokenModal);
+
+document.getElementById('tokenSaveBtn').addEventListener('click', async () => {
+  const val = document.getElementById('tokenInput').value.trim();
+  if (!val) { alert('Token nesmí být prázdný.'); return; }
+  localStorage.setItem(GH_TOKEN_KEY, val);
+  closeTokenModal();
+  await syncFromGitHub();
+});
+
+document.getElementById('tokenDeleteBtn').addEventListener('click', () => {
+  if (confirm('Opravdu odebrat token? Synchronizace se vypne, data v prohlížeči zůstanou.')) {
+    localStorage.removeItem(GH_TOKEN_KEY);
+    ghSha = null;
+    closeTokenModal();
+    setSyncStatus('notoken');
+  }
+});
+
+document.getElementById('tokenModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('tokenModal')) closeTokenModal();
+});
+
 // ============ INIT ============
 load();
 renderQuickTags();
 renderAll();
 if (!IS_TOUCH) input.focus();
+// Sync při startu
+syncFromGitHub();
 </script>
 </body>
 </html>
