@@ -174,6 +174,131 @@
     .token-modal-card { border-radius: 16px; padding: 8px 28px 28px; }
   }
 
+  /* AI kouč */
+  .icon-btn.ai-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+  .ai-modal-card {
+    display: flex;
+    flex-direction: column;
+    max-height: 88vh;
+    padding: 8px 0 0;
+  }
+
+  .ai-modal-card .modal-handle { margin: 10px auto 0; }
+
+  .ai-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ai-thought-preview {
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 20px;
+    font-size: 14px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    flex-shrink: 0;
+    max-height: 80px;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+  }
+
+  .ai-key-setup {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .ai-key-setup p { font-size: 13px; color: var(--text-dim); margin: 0; line-height: 1.5; }
+  .ai-key-setup a { color: var(--accent); }
+
+  .ai-chat-area {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .chat-msg {
+    max-width: 88%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+
+  .chat-user {
+    align-self: flex-end;
+    background: var(--accent-soft);
+    color: var(--text);
+    border: 1px solid rgba(109,185,163,0.3);
+    border-bottom-right-radius: 4px;
+  }
+
+  .chat-assistant {
+    align-self: flex-start;
+    background: var(--card-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+  }
+
+  .chat-typing { color: var(--text-muted); font-style: italic; }
+
+  .chat-input-row {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px calc(12px + var(--safe-bottom));
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--card);
+  }
+
+  .chat-input-row input {
+    flex: 1;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 16px;
+    font-family: inherit;
+    -webkit-appearance: none;
+    min-height: 44px;
+  }
+
+  .chat-input-row input:focus { outline: none; border-color: var(--accent); }
+
+  .chat-input-row .btn { flex-shrink: 0; min-width: 80px; text-align: center; }
+
+  .ai-model-note {
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 4px 0 8px;
+    flex-shrink: 0;
+  }
+
   nav {
     display: flex;
     gap: 4px;
@@ -1007,6 +1132,36 @@
   <footer>Park myšlenek · jediný soubor, žádný server, vše u tebe.</footer>
 </div>
 
+<!-- AI MODAL -->
+<div class="modal-overlay" id="aiModal" style="display:none" role="dialog" aria-modal="true">
+  <div class="modal-card ai-modal-card">
+    <div class="modal-handle"></div>
+    <div class="ai-modal-header">
+      <span class="modal-title">🧠 Kouč</span>
+      <button class="icon-btn" id="aiCloseBtn" title="Zavřít">✕</button>
+    </div>
+    <div class="ai-thought-preview" id="aiThoughtPreview"></div>
+
+    <!-- Nastavení klíče -->
+    <div class="ai-key-setup" id="aiKeySetup" style="display:none">
+      <p>AI koučink používá Claude (Anthropic). Potřebuješ API klíč — vygeneruj ho na <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a> (začíná <code>sk-ant-</code>).</p>
+      <p>Klíč se uloží jen v tomto prohlížeči. Text myšlenek jde do Anthropic — jako ChatGPT, ale přes tvůj klíč.</p>
+      <input type="password" id="aiKeyInput" placeholder="sk-ant-api03-..." autocomplete="off" autocorrect="off" autocapitalize="off">
+      <button class="btn primary" id="aiKeySaveBtn">Uložit a spustit kouče</button>
+    </div>
+
+    <!-- Chat -->
+    <div class="ai-chat-area" id="aiChatArea" style="display:none">
+      <div class="chat-messages" id="aiChatMessages"></div>
+      <div class="ai-model-note">claude haiku · text jde do Anthropic</div>
+      <div class="chat-input-row">
+        <input type="text" id="aiUserInput" placeholder="Napiš odpověď nebo otázku…" autocapitalize="sentences">
+        <button class="btn primary" id="aiSendBtn">Odeslat</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- TOKEN MODAL -->
 <div class="token-modal-overlay" id="tokenModal" style="display:none">
   <div class="token-modal-card">
@@ -1213,6 +1368,7 @@ function renderThought(t) {
         <span class="time">${timeStr}</span>
       </div>
       <div class="actions">
+        ${t.status === 'open' ? `<button class="icon-btn ai-btn" data-act="ai" data-id="${t.id}" title="Poradit s AI">🧠</button>` : ''}
         <button class="icon-btn done-btn" data-act="toggle-done" data-id="${t.id}" ${doneActive}>${t.status === 'done' ? '↺' : '✓'}</button>
         <button class="icon-btn archive-btn" data-act="archive" data-id="${t.id}" title="Archivovat">📥</button>
         <button class="icon-btn delete-btn" data-act="delete" data-id="${t.id}" title="Smazat">×</button>
@@ -1520,6 +1676,8 @@ document.body.addEventListener('click', e => {
     updateStatus(id, 'archived');
   } else if (act === 'delete') {
     if (confirm('Smazat tuto myšlenku?')) deleteThought(id);
+  } else if (act === 'ai') {
+    openAiModal(id);
   }
 });
 
@@ -1815,6 +1973,156 @@ document.getElementById('eodDoneBtn').addEventListener('click', closeEodModal);
 // Zavřít klepnutím mimo modal kartu
 document.getElementById('eodModal').addEventListener('click', e => {
   if (e.target === document.getElementById('eodModal')) closeEodModal();
+});
+
+// ============ AI KOUČ ============
+const AI_KEY_STORAGE  = 'parkMysleni_anthropicKey';
+const AI_KB_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/data/knowledge-base.md`;
+const AI_MODEL  = 'claude-haiku-4-5';
+
+let aiKnowledgeBase  = null;   // cache na session
+let aiChatHistory    = [];
+let aiCurrentId      = null;
+let aiSending        = false;
+
+async function loadKnowledgeBase() {
+  if (aiKnowledgeBase) return aiKnowledgeBase;
+  try {
+    const r = await fetch(AI_KB_URL + '?_=' + Date.now());
+    if (r.ok) aiKnowledgeBase = await r.text();
+  } catch (e) { console.warn('KB load failed:', e); }
+  return aiKnowledgeBase || '';
+}
+
+function aiKey() { return localStorage.getItem(AI_KEY_STORAGE); }
+
+async function openAiModal(thoughtId) {
+  const thought = thoughts.find(t => t.id === thoughtId);
+  if (!thought) return;
+  aiCurrentId   = thoughtId;
+  aiChatHistory = [];
+
+  document.getElementById('aiThoughtPreview').textContent = thought.text;
+  document.getElementById('aiChatMessages').innerHTML = '';
+  document.getElementById('aiModal').style.display = 'flex';
+  document.body.classList.add('modal-open');
+
+  if (!aiKey()) {
+    document.getElementById('aiKeySetup').style.display = 'flex';
+    document.getElementById('aiChatArea').style.display  = 'none';
+    setTimeout(() => document.getElementById('aiKeyInput').focus(), 100);
+    return;
+  }
+  startAiChat(thought);
+}
+
+async function startAiChat(thought) {
+  document.getElementById('aiKeySetup').style.display = 'none';
+  document.getElementById('aiChatArea').style.display  = 'flex';
+  const tagsStr = thought.tags.length ? ` (tagy: ${thought.tags.map(t => '#' + t).join(', ')})` : '';
+  await sendToAI(`Tato myšlenka mi leží v hlavě: „${thought.text}"${tagsStr}. Pomoz mi s tím.`);
+}
+
+function addChatMsg(role, text) {
+  const wrap = document.getElementById('aiChatMessages');
+  const div  = document.createElement('div');
+  div.className = `chat-msg chat-${role}`;
+  div.textContent = text;
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+  return div;
+}
+
+async function sendToAI(userText) {
+  if (aiSending || !userText.trim()) return;
+  aiSending = true;
+
+  addChatMsg('user', userText);
+  aiChatHistory.push({ role: 'user', content: userText });
+
+  const input = document.getElementById('aiUserInput');
+  const sendBtn = document.getElementById('aiSendBtn');
+  if (input) input.value = '';
+  if (sendBtn) sendBtn.disabled = true;
+
+  const typingEl = addChatMsg('assistant', '…');
+  typingEl.classList.add('chat-typing');
+
+  try {
+    const kb = await loadKnowledgeBase();
+    const systemText = `Jsi osobní kouč a poradce Tomáše Hrbáčka. Znáš jeho CliftonStrengths profil a psychologický profil — najdeš je níže.
+
+Tvůj styl: stručný, přímý, konkrétní. Žádná terapeutická řeč. Neptej se na více než jednu otázku v jedné odpovědi. Odpovídej vždy česky. Neopakuj celou myšlenku zpátky.
+
+Cíl: pomoct Tomášovi pochopit, co za myšlenkou stojí, a dostat se k prvnímu konkrétnímu kroku nebo rozhodnutí.
+
+---
+
+${kb}`;
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': aiKey(),
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+        'anthropic-beta': 'prompt-caching-2024-07-31'
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        max_tokens: 700,
+        system: [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }],
+        messages: aiChatHistory
+      })
+    });
+
+    typingEl.remove();
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error?.message || `HTTP ${resp.status}`);
+    }
+
+    const data  = await resp.json();
+    const reply = data.content[0].text;
+    aiChatHistory.push({ role: 'assistant', content: reply });
+    addChatMsg('assistant', reply);
+
+  } catch (e) {
+    typingEl.remove();
+    addChatMsg('assistant', `⚠️ Chyba: ${e.message}`);
+  } finally {
+    aiSending = false;
+    if (sendBtn) sendBtn.disabled = false;
+    if (input && !IS_TOUCH) input.focus();
+  }
+}
+
+function closeAiModal() {
+  document.getElementById('aiModal').style.display = 'none';
+  document.body.classList.remove('modal-open');
+}
+
+// AI modal events
+document.getElementById('aiCloseBtn').addEventListener('click', closeAiModal);
+document.getElementById('aiModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('aiModal')) closeAiModal();
+});
+
+document.getElementById('aiKeySaveBtn').addEventListener('click', async () => {
+  const val = document.getElementById('aiKeyInput').value.trim();
+  if (!val.startsWith('sk-ant-')) { alert('Klíč musí začínat sk-ant-'); return; }
+  localStorage.setItem(AI_KEY_STORAGE, val);
+  const thought = thoughts.find(t => t.id === aiCurrentId);
+  if (thought) startAiChat(thought);
+});
+
+document.getElementById('aiSendBtn').addEventListener('click', () => {
+  sendToAI(document.getElementById('aiUserInput').value);
+});
+
+document.getElementById('aiUserInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendToAI(e.target.value); }
 });
 
 // ============ GITHUB SYNC ============
